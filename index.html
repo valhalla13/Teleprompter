@@ -1,0 +1,336 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0b0f19" />
+  <!-- PWA -->
+  <link rel="manifest" href="manifest.webmanifest">
+  <meta name="mobile-web-app-capable" content="yes">
+  <!-- iOS PWA -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <title>Teleprompter + Recorder (PWA)</title>
+  <style>
+    :root{
+      --accent:#2563eb;
+      --bg:#0b0f19;
+      --text:#e5e7eb;
+      --muted:#9ca3af;
+      --safe-top: env(safe-area-inset-top, 0px);
+      --safe-bottom: env(safe-area-inset-bottom, 0px);
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%;margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,"Helvetica Neue",Arial,"Noto Sans",sans-serif}
+    #app{height:100vh;display:flex;flex-direction:column}
+    #stage{flex:1;display:flex;flex-direction:column;min-height:0}
+    #prompterWrap{position:relative;flex:7 1 70%;min-height:0;overflow:hidden;border-bottom:1px solid #1f2937;padding-top:calc(var(--safe-top));}
+    #prompter{position:absolute;inset:0;overflow:hidden;padding:0 16px 120px 16px;}
+    #script{
+      will-change: transform; display:flex; flex-direction:column; gap:1rem;
+      font-size:28px; line-height:1.4; font-weight:600; letter-spacing:.2px; text-shadow:0 1px 0 rgba(0,0,0,.4);
+      margin:0 auto; width:min(80vw, 70ch); max-width:720px;
+    }
+    .fadeTop,.fadeBottom{position:absolute;left:0;right:0;height:64px;z-index:2;pointer-events:none;background:linear-gradient(180deg,var(--bg),transparent);}
+    .fadeBottom{bottom:0;top:auto;background:linear-gradient(0deg,var(--bg),transparent)}
+    .centerLine{position:absolute;left:10%;right:10%;top:36%;height:2px;background:rgba(255,255,255,.12);border-radius:2px;z-index:1}
+    #controlsBar{
+      display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;
+      padding:.6rem .8rem;border-top:1px solid #1f2937;border-bottom:1px solid #1f2937;background:rgba(15,23,42,.9);
+      position:sticky;top:0;z-index:5;
+    }
+    #controlsBar .group{display:flex;align-items:center;gap:.5rem;background:#111827;border:1px solid #1f2937;border-radius:.6rem;padding:.35rem .5rem}
+    #controlsBar label{font-size:.84rem;color:var(--muted)}
+    #controlsBar input[type="range"]{accent-color:var(--accent);width:160px}
+    .btn{appearance:none;border:1px solid #1f2937;background:#0b1220;color:var(--text);padding:.55rem .8rem;border-radius:.6rem;font-weight:600;cursor:pointer}
+    .btn.primary{border-color:#2142a0;background:linear-gradient(180deg,#1d4ed8,#1e40af)}
+    .btn.success{border-color:#0f5132;background:linear-gradient(180deg,#16a34a,#15803d)}
+    .btn.warn{border-color:#7c5800;background:linear-gradient(180deg,#f59e0b,#b45309)}
+    .btn.danger{border-color:#7c1d1d;background:linear-gradient(180deg,#ef4444,#b91c1c)}
+    .spacer{flex:1}
+    #cameraWrap{flex:3 1 30%;min-height:140px;position:relative;background:#000;padding-bottom:var(--safe-bottom)}
+    #preview{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;transform:scaleX(-1);background:#000}
+    input[type="file"]{display:none}
+    .fileLabel{border:1px dashed #334155;background:#0b1220;color:var(--text);padding:.5rem .75rem;border-radius:.6rem;cursor:pointer;font-weight:600}
+    #countdown{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-size:4rem;font-weight:800;background:rgba(0,0,0,.5);padding:.6rem 1rem;border-radius:1rem;display:none;z-index:10}
+    .pill{font-size:.75rem;color:#cbd5e1;background:#0b1220;border:1px solid #1f2937;padding:.18rem .5rem;border-radius:999px}
+    .toggle{display:flex;align-items:center;gap:.4rem;cursor:pointer}
+    .toggle input{accent-color:var(--accent)}
+    @media (max-width:720px){
+      #script{font-size:22px;width:min(90vw, 65ch)}
+      #controlsBar input[type="range"]{width:130px}
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <main id="stage">
+      <!-- Teleprompter at top; uses safe-area to hug the notch/camera -->
+      <section id="prompterWrap">
+        <div class="fadeTop"></div>
+        <div class="centerLine" id="guideLine"></div>
+        <div id="countdown">3</div>
+        <div id="prompter" aria-label="Teleprompter">
+          <div id="script"></div>
+        </div>
+        <div class="fadeBottom"></div>
+      </section>
+
+      <!-- Controls in the middle -->
+      <section id="controlsBar">
+        <label class="fileLabel" for="fileInput">📄 Load .txt</label>
+        <input id="fileInput" type="file" accept=".txt,text/plain"/>
+        <div class="group">
+          <label for="speed">Speed</label>
+          <input id="speed" type="range" min="3" max="400" value="50" />
+          <span class="pill"><span id="speedVal">50</span> px/s</span>
+        </div>
+        <div class="group">
+          <label for="font">Font</label>
+          <input id="font" type="range" min="18" max="56" value="28" />
+          <span class="pill"><span id="fontVal">28</span> px</span>
+        </div>
+        <div class="group">
+          <label class="toggle"><input id="mirror" type="checkbox" checked/>Mirror</label>
+          <label class="toggle"><input id="centerline" type="checkbox" checked/>Guide</label>
+          <label class="toggle"><input id="edge" type="checkbox"/>Edge mode</label>
+        </div>
+        <div class="spacer"></div>
+        <button id="fsBtn" class="btn">⛶ Fullscreen</button>
+        <button id="startBtn" class="btn primary">▶ Start & Record</button>
+        <button id="pauseBtn" class="btn warn" disabled>⏸ Pause</button>
+        <button id="resumeBtn" class="btn success" disabled>▶ Resume</button>
+        <button id="stopBtn" class="btn danger" disabled>⏹ Stop & Save</button>
+      </section>
+
+      <!-- Camera at the bottom -->
+      <section id="cameraWrap">
+        <video id="preview" autoplay playsinline muted></video>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    // Register service worker
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('./sw.js');
+    }
+
+    // --- State ---
+    const scriptEl = document.getElementById('script');
+    const prompter = document.getElementById('prompter');
+    const preview = document.getElementById('preview');
+    const fileInput = document.getElementById('fileInput');
+    const speed = document.getElementById('speed');
+    const speedVal = document.getElementById('speedVal');
+    const font = document.getElementById('font');
+    const fontVal = document.getElementById('fontVal');
+    const mirror = document.getElementById('mirror');
+    const guideLine = document.getElementById('guideLine');
+    const centerline = document.getElementById('centerline');
+    const edge = document.getElementById('edge');
+    const countdown = document.getElementById('countdown');
+
+    const startBtn = document.getElementById('startBtn');
+    const pauseBtn = document.getElementById('pauseBtn');
+    const resumeBtn = document.getElementById('resumeBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const fsBtn = document.getElementById('fsBtn');
+
+    let mediaStream = null;
+    let mediaRecorder = null;
+    let recordedChunks = [];
+    let scrolling = false;
+    let paused = false;
+    let rafId = 0;
+    let lastTs = 0;
+    let offset = 0;
+
+    // --- Helpers ---
+    function setScriptText(text){
+      scriptEl.innerHTML = "";
+      const lines = text.replace(/\\r\\n/g,"\\n").split("\\n");
+
+      // Top spacer: hug the notch as much as possible, adjustable by Edge mode
+      const topSpacer = document.createElement('div');
+      topSpacer.id = "topSpacer";
+      topSpacer.style.height = edge.checked ? "0px" : "10vh";
+      scriptEl.appendChild(topSpacer);
+
+      for(const ln of lines){
+        const p = document.createElement('div');
+        p.textContent = ln.trim() === "" ? " " : ln;
+        scriptEl.appendChild(p);
+      }
+      const spacer = document.createElement('div');
+      spacer.style.height = "60vh";
+      scriptEl.appendChild(spacer);
+      offset = 0;
+      scriptEl.style.transform = "translateY(0px)";
+    }
+
+    function defaultScript(){
+      setScriptText(
+`Install this as a PWA from your browser menu and open from the Home Screen.
+Fullscreen + Edge mode push text closer to the camera area for better eye contact.`
+      );
+    }
+
+    // --- UI ---
+    speed.addEventListener('input',()=>{ speedVal.textContent = speed.value; });
+    font.addEventListener('input',()=>{
+      fontVal.textContent = font.value;
+      scriptEl.style.fontSize = font.value + "px";
+    });
+    mirror.addEventListener('change',()=>{
+      preview.style.transform = mirror.checked ? "scaleX(-1)" : "scaleX(1)";
+    });
+    centerline.addEventListener('change',()=>{
+      guideLine.style.display = centerline.checked ? "block" : "none";
+    });
+    edge.addEventListener('change',()=>{
+      const ts = document.getElementById('topSpacer');
+      if(ts){ ts.style.height = edge.checked ? "0px" : "10vh"; }
+    });
+
+    fileInput.addEventListener('change', async (e)=>{
+      const file = e.target.files?.[0];
+      if(!file) return;
+      const text = await file.text();
+      setScriptText(text);
+    });
+
+    // Fullscreen
+    async function goFullscreen(){
+      try{
+        const el = document.documentElement;
+        if(el.requestFullscreen){ await el.requestFullscreen(); }
+        if(screen.orientation && screen.orientation.lock){
+          try{ await screen.orientation.lock('portrait'); }catch{}
+        }
+      }catch(e){ console.log("Fullscreen error", e); }
+    }
+    fsBtn.addEventListener('click', goFullscreen);
+
+    // --- Camera ---
+    async function initCamera(){
+      try{
+        mediaStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } },
+          audio: true
+        });
+        preview.srcObject = mediaStream;
+      }catch(err){
+        alert("Camera/Mic access failed: " + err.message);
+      }
+    }
+
+    // --- Recorder ---
+    function pickMimeType(){
+      const candidates = [
+        "video/mp4;codecs=h264,aac",
+        "video/mp4",
+        "video/webm;codecs=vp9,opus",
+        "video/webm;codecs=vp8,opus",
+        "video/webm"
+      ];
+      for(const t of candidates){
+        if(window.MediaRecorder && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t)){
+          return t;
+        }
+      }
+      return "";
+    }
+
+    function startRecorder(){
+      if(!window.MediaRecorder){
+        alert("MediaRecorder isn't supported. Try latest Chrome/Edge or iOS 17+ Safari.");
+        return false;
+      }
+      const mimeType = pickMimeType();
+      try{
+        mediaRecorder = new MediaRecorder(mediaStream, mimeType? { mimeType } : undefined);
+      }catch(e){
+        alert("Unable to start recorder: " + e.message);
+        return false;
+      }
+      recordedChunks = [];
+      mediaRecorder.ondataavailable = (ev)=>{
+        if(ev.data && ev.data.size>0) recordedChunks.push(ev.data);
+      };
+      mediaRecorder.onstop = saveRecording;
+      mediaRecorder.start(100);
+      return true;
+    }
+
+    function saveRecording(){
+      const chosenType = mediaRecorder?.mimeType || "video/webm";
+      const blob = new Blob(recordedChunks, { type: chosenType });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const ts = new Date();
+      const pad = n => String(n).padStart(2,"0");
+      const ext = chosenType.includes("mp4") ? "mp4" : "webm";
+      const name = `teleprompter_${ts.getFullYear()}-${pad(ts.getMonth()+1)}-${pad(ts.getDate())}_${pad(ts.getHours())}-${pad(ts.getMinutes())}-${pad(ts.getSeconds())}.${ext}`;
+      a.href = url; a.download = name; document.body.appendChild(a); a.click();
+      setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); }, 2000);
+    }
+
+    // --- Scrolling ---
+    let scrolling = false, paused = false, rafId = 0, lastTs = 0, offset = 0;
+    function tick(ts){
+      if(!scrolling || paused){ return; }
+      if(!lastTs) lastTs = ts;
+      const dt = (ts - lastTs) / 1000;
+      lastTs = ts;
+      offset += dt * Number(speed.value);
+      scriptEl.style.transform = `translateY(${-offset}px)`;
+      const totalHeight = scriptEl.getBoundingClientRect().height;
+      const boxHeight = prompter.getBoundingClientRect().height;
+      if(offset >= totalHeight - boxHeight){ stopAll(true); return; }
+      rafId = requestAnimationFrame(tick);
+    }
+    function startScroll(){ scrolling = true; paused = false; lastTs = 0; rafId = requestAnimationFrame(tick); }
+    function pauseScroll(){ paused = true; cancelAnimationFrame(rafId); }
+    function resumeScroll(){ if(!scrolling) return; paused = false; lastTs = 0; rafId = requestAnimationFrame(tick); }
+    function stopScroll(){ scrolling = false; paused = false; cancelAnimationFrame(rafId); lastTs = 0; }
+
+    // --- Orchestration ---
+    const countdownEl = document.getElementById('countdown');
+    async function startAll(){
+      await goFullscreen(); // try to remove browser chrome
+      countdownEl.style.display = "block";
+      for(let i=3;i>0;i--){ countdownEl.textContent = i; await new Promise(r=>setTimeout(r,700)); }
+      countdownEl.style.display = "none";
+      if(!mediaStream) await initCamera();
+      const ok = startRecorder(); if(!ok) return;
+      startScroll();
+      startBtn.disabled = true; pauseBtn.disabled = false; resumeBtn.disabled = true; stopBtn.disabled = false;
+    }
+    function stopAll(fromEnd=false){
+      stopScroll();
+      if(mediaRecorder && mediaRecorder.state !== "inactive"){ mediaRecorder.stop(); }
+      startBtn.disabled = false; pauseBtn.disabled = true; resumeBtn.disabled = true; stopBtn.disabled = true;
+      if(fromEnd){
+        const done = document.createElement('div');
+        done.textContent = "Reached end of script — recording saved.";
+        Object.assign(done.style,{position:"fixed",bottom:"16px",left:"50%",transform:"translateX(-50%)",
+          background:"rgba(16,185,129,.15)",border:"1px solid #10b981",color:"#d1fae5",
+          padding:"10px 14px",borderRadius:"10px",zIndex:"9999"});
+        document.body.appendChild(done); setTimeout(()=>done.remove(), 2400);
+      }
+    }
+
+    // Buttons
+    document.getElementById('startBtn').addEventListener('click', startAll);
+    document.getElementById('pauseBtn').addEventListener('click', ()=>{ pauseScroll(); pauseBtn.disabled=true; resumeBtn.disabled=false; });
+    document.getElementById('resumeBtn').addEventListener('click', ()=>{ resumeScroll(); pauseBtn.disabled=false; resumeBtn.disabled=true; });
+    document.getElementById('stopBtn').addEventListener('click', ()=> stopAll(false));
+
+    // Init
+    defaultScript();
+    initCamera();
+  </script>
+</body>
+</html>
